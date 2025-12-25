@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Merry Christmas - 2025 魔法手势艺术场景</title>
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; background-color: #000; overflow: hidden; font-family: 'serif'; touch-action: none; }
+        .side-panel { position: absolute; left: 6%; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 30px; z-index: 100; }
+        .title-group { color: #F6AEC3; pointer-events: none; }
+        .title-group h1 { font-family: 'Dancing Script', cursive; font-size: 4.5rem; margin: 0; text-shadow: 0 0 20px rgba(246, 174, 195, 0.4); }
+        .custom-btn { width: 180px; padding: 12px 0; border-radius: 12px; border: 2px solid #F6AEC3; background: rgba(20, 20, 20, 0.4); color: #fff; font-size: 1.1rem; letter-spacing: 4px; cursor: pointer; transition: 0.3s; backdrop-filter: blur(8px); text-align: center; }
+        #status-bar { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: #F6AEC3; font-size: 14px; letter-spacing: 3px; z-index: 1000; background: rgba(0,0,0,0.5); padding: 8px 25px; border-radius: 20px; text-align: center; min-width: 250px; }
+        #video-wrap { position: absolute; bottom: 20px; right: 20px; width: 120px; height: 90px; border-radius: 10px; overflow: hidden; border: 1px solid #F6AEC3; transform: scaleX(-1); opacity: 0.6; z-index: 1000; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        #blessing-card { display: none; position: fixed; right: 8%; top: 50%; transform: translateY(-50%); width: 260px; padding: 35px; background: rgba(10, 10, 10, 0.9); backdrop-filter: blur(20px); border: 1px solid rgba(246, 174, 195, 0.4); border-radius: 20px; text-align: center; color: #FBE2E5; z-index: 2000; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 3000; justify-content: center; align-items: center; }
+        .modal-content { background: #111; padding: 40px; border-radius: 20px; border: 1px solid #FFD700; text-align: center; width: 320px; }
+    </style>
+</head>
+<body>
+
+    <div id="status-bar">魔法已就绪 - 请展示手势</div>
+    <div id="video-wrap"><video id="webcam" autoplay playsinline></video></div>
+
+    <div class="side-panel">
+        <div class="title-group"><h1>Merry</h1><h1>Christmas</h1></div>
+        <div class="custom-btn" onclick="document.getElementById('photo-upload').click()">上传照片</div>
+        <div class="custom-btn" onclick="showWishModal()">写下心愿</div>
+        <div id="light-btn" class="custom-btn" onclick="toggleLights()">开启圣诞灯</div>
+        <div class="custom-btn" onclick="location.reload()">重置场景</div>
+    </div>
+
+    <div id="blessing-card">
+        <div id="blessing-text" style="margin-bottom:20px; line-height: 1.6;"></div>
+        <div class="custom-btn" style="width:100%" onclick="closeBlessing()">关闭</div>
+    </div>
+
+    <div id="wish-modal" class="modal">
+        <div class="modal-content">
+            <h3 style="color:#FFD700">心愿清单</h3>
+            <input type="text" id="wish-input" maxlength="15" style="width:90%; padding:12px; margin:20px 0; background:#222; color:white; border:1px solid #444;" placeholder="写下愿望...">
+            <div class="custom-btn" style="width:100%; border-color:#FFD700" onclick="submitWish()">完成许愿</div>
+        </div>
+    </div>
+
+    <input type="file" id="photo-upload" hidden accept="image/*">
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        const CONFIG = {
+            TREE_PARTICLES: 55000, TREE_HEIGHT: 7.0, BASE_RADIUS: 4.5, LAYERS: 3,
+            SNOW_COUNT: 9000, GROUND_COUNT: 60000,
+            COLORS: { TOP: "#F8CCD4", MID: "#F28DA8", BOTTOM: "#8B324A", STAR: "#FFD700", RIBBON: "#F28DA8", FRAME: "#A31D2E", BOW: "#B22222", LIGHTS: ["#FFD700", "#E5E4E2", "#FFC0CB", "#FAFAD2", "#D8A499"] }
+        };
+
+        let scene, camera, renderer, composer, clock, controls, raycaster, mouse;
+        let treePoints, ribbon, snowPoints, groundPoints, lightsGroup, starMesh, treeGroup;
+        let ornaments = [], fireworks = [], lightsActive = false, morphFactor = 0, prevHandX = null, prevHandY = null;
+
+        function getTreeRadiusAt(y) {
+            const p = 1.0 - (y + CONFIG.TREE_HEIGHT/2) / CONFIG.TREE_HEIGHT;
+            const wave = (p * CONFIG.LAYERS) % 1.0;
+            return p * CONFIG.BASE_RADIUS * (0.6 + Math.pow(wave, 0.5) * 0.4);
+        }
+
+        function getSmoothRibbonRadiusAt(y) {
+            const p = 1.0 - (y + CONFIG.TREE_HEIGHT/2) / CONFIG.TREE_HEIGHT;
+            const wave = Math.cos(p * Math.PI * 6 - Math.PI) * 0.5 + 0.5;
+            return p * CONFIG.BASE_RADIUS * (0.7 + wave * 0.3);
+        }
+
+        init();
+        setupHands();
+
+        function init() {
+            scene = new THREE.Scene();
+            clock = new THREE.Clock();
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+            camera = new THREE.PerspectiveCamera(35, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera.position.set(-6, 3, 20);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            document.body.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+            dl.position.set(5, 10, 7);
+            scene.add(dl);
+
+            treeGroup = new THREE.Group(); treeGroup.position.x = 2.2; scene.add(treeGroup);
+
+            createTreePoints();
+            createRibbon();
+            createElegantLights();
+            createStar();
+            createSnow();
+            createGround();
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 0.4;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            // --- 还原文件 56 光感配置 (Threshold 0.25) ---
+            composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.4, 0.25));
+
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('click', onSceneClick);
+            document.getElementById('photo-upload').addEventListener('change', handlePhotoUpload);
+            animate();
+        }
+
+        function createTreePoints() {
+            const geo = new THREE.BufferGeometry();
+            const p = [], exp = [], c = [], s = [], o = [];
+            for (let i = 0; i < CONFIG.TREE_PARTICLES; i++) {
+                const yRel = Math.random();
+                const y = yRel * CONFIG.TREE_HEIGHT - CONFIG.TREE_HEIGHT/2;
+                const r = Math.sqrt(Math.random()) * getTreeRadiusAt(y);
+                const theta = Math.random() * Math.PI * 2;
+                p.push(Math.cos(theta)*r, y, Math.sin(theta)*r);
+                const bR = 8 + Math.random()*6;
+                exp.push(Math.cos(theta)*bR, y+(Math.random()-0.5)*8, Math.sin(theta)*bR);
+                const col = new THREE.Color(CONFIG.COLORS.TOP);
+                if (yRel > 0.25) col.lerp(new THREE.Color(CONFIG.COLORS.MID), (yRel - 0.25) * 1.5);
+                if (yRel > 0.7) col.lerp(new THREE.Color(CONFIG.COLORS.BOTTOM), (yRel - 0.7) * 2.0);
+                c.push(col.r, col.g, col.b); s.push(Math.random()*0.6 + 0.2); o.push(Math.random()*Math.PI*2);
+            }
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+            geo.setAttribute('aExplodePos', new THREE.Float32BufferAttribute(exp, 3));
+            geo.setAttribute('aColor', new THREE.Float32BufferAttribute(c, 3));
+            geo.setAttribute('aScale', new THREE.Float32BufferAttribute(s, 1));
+            geo.setAttribute('aOffset', new THREE.Float32BufferAttribute(o, 1));
+
+            treePoints = new THREE.Points(geo, new THREE.ShaderMaterial({
+                uniforms: { uTime: { value: 0 }, uMorph: { value: 0 } },
+                vertexShader: `
+                    attribute float aScale, aOffset; attribute vec3 aColor, aExplodePos;
+                    varying vec3 vColor; uniform float uTime, uMorph;
+                    void main() {
+                        vColor = aColor;
+                        vec3 p = mix(position, aExplodePos, uMorph);
+                        p.y += sin(uTime * 1.2 + aOffset) * 0.06;
+                        p.x += cos(uTime * 1.2 + aOffset) * 0.02;
+                        vec4 mvp = modelViewMatrix * vec4(p, 1.0);
+                        gl_PointSize = aScale * (130.0 / -mvp.z);
+                        gl_Position = projectionMatrix * mvp;
+                    }
+                `,
+                fragmentShader: `varying vec3 vColor; void main() { 
+                    float d = distance(gl_PointCoord, vec2(0.5)); if(d > 0.5) discard;
+                    gl_FragColor = vec4(vColor, pow(1.0 - d*2.0, 2.0) * 0.85); 
+                }`,
+                transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+            }));
+            treePoints.renderOrder = 5;
+            treeGroup.add(treePoints);
+        }
+
+        // --- 照片：实心材质 + 不被遮挡 + 还原色彩 ---
+        function createPhotoMedallion(texture) {
+            const y = (Math.random() - 0.5) * CONFIG.TREE_HEIGHT;
+            const r = getTreeRadiusAt(y)*1.02, a = Math.random()*Math.PI*2;
+            const group = new THREE.Group();
+            
+            // 实心边框
+            const fMat = new THREE.MeshBasicMaterial({ color: CONFIG.COLORS.FRAME });
+            group.add(new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.04, 16, 32), fMat));
+            
+            // 实心照片：禁用深度测试防止遮挡，锁定不透明度 100%
+            const pMat = new THREE.MeshBasicMaterial({ 
+                map: texture, 
+                transparent: false, 
+                opacity: 1.0, 
+                depthTest: false // 核心：粒子不会遮挡它
+            });
+            const pF = new THREE.Mesh(new THREE.CircleGeometry(0.28, 32), pMat); pF.position.z = 0.01;
+            const pB = pF.clone(); pB.position.z = -0.01; pB.rotation.y = Math.PI;
+            group.add(pF, pB);
+            
+            group.position.set(Math.cos(a)*r, y, Math.sin(a)*r);
+            group.lookAt(group.position.x*2, y, group.position.z*2); group.rotateX(-Math.PI/9);
+            group.userData = { type:'photo', home: group.position.clone(), burst: group.position.clone().normalize().multiplyScalar(12), homeRot: group.quaternion.clone() };
+            group.userData.burst.z += 10;
+            
+            group.renderOrder = 9999; // 最高层级
+            treeGroup.add(group); ornaments.push(group);
+        }
+
+        function createRibbonBow(text) {
+            const y = (Math.random() - 0.5) * CONFIG.TREE_HEIGHT;
+            const r = getTreeRadiusAt(y)*1.02, a = Math.random()*Math.PI*2;
+            const group = new THREE.Group();
+            // 实心蝴蝶结
+            const bowMat = new THREE.MeshBasicMaterial({ color: CONFIG.COLORS.BOW, side: THREE.DoubleSide, depthTest: false });
+            
+            const wingS = new THREE.Shape();
+            wingS.moveTo(0,0); wingS.bezierCurveTo(0.2,0.2,0.5,0.3,0.6,0.1); wingS.bezierCurveTo(0.7,-0.1,0.6,-0.4,0.4,-0.4); wingS.bezierCurveTo(0.2,-0.4,0.1,-0.1,0,0);
+            const wingGeo = new THREE.ExtrudeGeometry(wingS, { depth: 0.02 });
+            const lW = new THREE.Mesh(wingGeo, bowMat); lW.scale.set(0.5,0.5,0.5); lW.rotation.z = 0.3;
+            const rW = lW.clone(); rW.rotation.y = Math.PI; rW.rotation.z = -0.3;
+            
+            // 蝴蝶结尾部开叉 60度
+            const tailS = new THREE.Shape();
+            tailS.moveTo(0,0); tailS.lineTo(0.18, -0.7); tailS.lineTo(0.0, -0.55); tailS.lineTo(-0.18, -0.7); tailS.lineTo(0,0);
+            const tL = new THREE.Mesh(new THREE.ShapeGeometry(tailS), bowMat); tL.position.set(-0.04, -0.05, -0.01); tL.rotation.z = 0.35;
+            const tR = tL.clone(); tR.rotation.y = Math.PI; tR.position.x = 0.04; tR.rotation.z = -0.35;
+            
+            const knot = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.06, 4, 8), bowMat); knot.rotation.z = Math.PI/2;
+            group.add(lW, rW, tL, tR, knot);
+            group.position.set(Math.cos(a)*r, y, Math.sin(a)*r);
+            group.lookAt(group.position.x*2, y, group.position.z*2); group.rotateX(-Math.PI/10);
+            group.userData = { type:'wish', text, home: group.position.clone(), burst: group.position.clone().multiplyScalar(4), homeRot: group.quaternion.clone() };
+            
+            group.renderOrder = 9998;
+            treeGroup.add(group); ornaments.push(group);
+        }
+
+        // --- 逻辑还原：文件 24/31 ---
+        function createRibbon() {
+            const pts = [];
+            for (let i = 0; i <= 800; i++) {
+                const t = i/800, y = t*CONFIG.TREE_HEIGHT - CONFIG.TREE_HEIGHT/2;
+                const rv = getSmoothRibbonRadiusAt(y)*1.05, a = t*Math.PI*8.4;
+                pts.push(new THREE.Vector3(Math.cos(a)*rv, y, Math.sin(a)*rv));
+            }
+            ribbon = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts,false,'catmullrom',0), 600, 0.04, 12, false), new THREE.MeshBasicMaterial({ color: CONFIG.COLORS.MID, transparent: true, opacity: 0.45 }));
+            treeGroup.add(ribbon);
+        }
+
+        function createElegantLights() {
+            lightsGroup = new THREE.Group();
+            for (let i = 0; i < 110; i++) {
+                const yRel = Math.random(), y = yRel*CONFIG.TREE_HEIGHT - CONFIG.TREE_HEIGHT/2;
+                const r = getTreeRadiusAt(y), a = Math.random()*Math.PI*2, col = CONFIG.COLORS.LIGHTS[i%5];
+                const l = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0, transparent: true, opacity: 0 }));
+                l.position.set(Math.cos(a)*r, y, Math.sin(a)*r);
+                l.userData = { home: l.position.clone(), burst: l.position.clone().multiplyScalar(4), phase: Math.random()*10 };
+                lightsGroup.add(l);
+            }
+            treeGroup.add(lightsGroup);
+        }
+
+        function createStar() {
+            const pts = []; for(let i=0; i<10; i++){ const r = i%2==0?0.75:0.32; const a=(i/5)*Math.PI; pts.push(new THREE.Vector2(Math.cos(a)*r,Math.sin(a)*r)); }
+            starMesh = new THREE.Mesh(new THREE.ExtrudeGeometry(new THREE.Shape(pts), { depth: 0.15, bevelEnabled: true }), new THREE.MeshStandardMaterial({ color: CONFIG.COLORS.STAR, emissive: CONFIG.COLORS.STAR, emissiveIntensity: 1.0 }));
+            starMesh.geometry.center(); starMesh.position.y = CONFIG.TREE_HEIGHT/2 + 0.35; treeGroup.add(starMesh);
+        }
+
+        function createSnow() {
+            const pos = new Float32Array(CONFIG.SNOW_COUNT * 3);
+            for(let i=0; i<CONFIG.SNOW_COUNT*3; i++) pos[i] = (Math.random()-0.5)*35;
+            const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            snowPoints = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.05, transparent: true, opacity: 0.4 }));
+            scene.add(snowPoints);
+        }
+
+        function createGround() {
+            const pos = new Float32Array(CONFIG.GROUND_COUNT * 3);
+            for(let i=0; i<CONFIG.GROUND_COUNT; i++){
+                const x=(Math.random()-0.5)*25, z=(Math.random()-0.5)*25;
+                pos[i*3]=x; pos[i*3+1]=Math.sin(x*0.5)*Math.cos(z*0.5)*0.4-4.2; pos[i*3+2]=z;
+            }
+            const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            groundPoints = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xcccccc, size: 0.02, transparent: true, opacity: 0.5 }));
+            scene.add(groundPoints);
+        }
+
+        // --- 手势魔法重构：形态 + 灯光 + 旋转 ---
+        async function setupHands() {
+            const v = document.getElementById('webcam');
+            const h = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+            h.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.75, minTrackingConfidence: 0.75 });
+            h.onResults(res => {
+                if (!res.multiHandLandmarks || res.multiHandLandmarks.length === 0) return;
+                const lm = res.multiHandLandmarks[0];
+                
+                // 1. 垂直位移 -> 开关灯
+                const curY = lm[9].y;
+                if (prevHandY !== null) {
+                    const dy = curY - prevHandY;
+                    if (dy < -0.07) { setLights(true); prevHandY = curY; return; } 
+                    if (dy > 0.07) { setLights(false); prevHandY = curY; return; }
+                }
+                prevHandY = curY;
+
+                // 2. 水平位移 -> 旋转
+                const curX = lm[9].x;
+                if (prevHandX !== null) {
+                    const dx = curX - prevHandX;
+                    if (Math.abs(dx) > 0.03) {
+                        treeGroup.rotation.y += dx * 5.0; // 往左往右转
+                    }
+                }
+                prevHandX = curX;
+
+                // 3. 静态手势 -> 形态
+                const isClosed = (lm[8].y > lm[6].y) && (lm[12].y > lm[10].y) && (lm[16].y > lm[14].y); 
+                const isOpen = (lm[8].y < lm[6].y) && (lm[12].y < lm[10].y) && (lm[16].y < lm[14].y);
+
+                if (isOpen) morphFactor = THREE.MathUtils.lerp(morphFactor, 1, 0.08);
+                if (isClosed) morphFactor = THREE.MathUtils.lerp(morphFactor, 0, 0.12);
+
+                document.getElementById('status-bar').innerText = `形态: ${morphFactor < 0.5 ? '合拢' : '散开'} | 灯光: ${lightsActive ? '开启' : '关闭'}`;
+            });
+            new Camera(v, { onFrame: async () => await h.send({image: v}), width: 640, height: 480 }).start();
+        }
+
+        function setLights(val) {
+            if(lightsActive === val) return;
+            lightsActive = val;
+            document.getElementById('light-btn').innerText = lightsActive ? "关闭圣诞灯" : "开启圣诞灯";
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+            treePoints.material.uniforms.uTime.value = time;
+            treePoints.material.uniforms.uMorph.value = morphFactor;
+            ribbon.material.opacity = Math.max(0, 0.45 * (1.0 - morphFactor * 2.0));
+
+            ornaments.forEach(obj => {
+                obj.position.lerpVectors(obj.userData.home, obj.userData.burst, morphFactor);
+                obj.scale.setScalar(1.0 + morphFactor * 2.5);
+                if(morphFactor > 0.1) obj.quaternion.slerp(camera.quaternion, morphFactor);
+                else obj.quaternion.copy(obj.userData.homeRot);
+            });
+
+            lightsGroup.children.forEach(l => {
+                l.position.lerpVectors(l.userData.home, l.userData.burst, morphFactor);
+                if(lightsActive) {
+                    const c = Math.sin(time*2.5 + l.userData.phase)*0.5 + 0.5;
+                    l.scale.setScalar((0.7 + c*0.4)*(1.0-morphFactor));
+                    l.material.opacity = (0.5 + c*0.5)*(1.0-morphFactor);
+                    l.material.emissiveIntensity = 0.5 + c*1.5;
+                } else { l.scale.setScalar(0.1); l.material.opacity = 0; }
+            });
+
+            const sPos = snowPoints.geometry.attributes.position.array;
+            for(let i=1; i<sPos.length; i+=3) { sPos[i] -= 0.025; if(sPos[i] < -5) sPos[i] = 15; }
+            snowPoints.geometry.attributes.position.needsUpdate = true;
+
+            if(starMesh) { starMesh.rotation.y = time * 0.6; starMesh.scale.setScalar(1.0 - morphFactor); }
+            controls.update(); composer.render();
+        }
+
+        // --- 业务 ---
+        window.toggleLights = () => setLights(!lightsActive);
+        window.showWishModal = () => document.getElementById('wish-modal').style.display = 'flex';
+        window.submitWish = () => { const v = document.getElementById('wish-input').value; if(v){ createRibbonBow(v); triggerFireworks(); document.getElementById('wish-modal').style.display='none'; document.getElementById('wish-input').value=""; } };
+        function triggerFireworks() { const ori = new THREE.Vector3(2.2, CONFIG.TREE_HEIGHT/2+0.35, 0); const c=160, p=[], v=[]; for(let i=0; i<c; i++){ p.push(ori.x, ori.y, ori.z); const th=Math.random()*Math.PI*2, ph=Math.random()*Math.PI, s=Math.random()*0.18+0.05; v.push(Math.sin(ph)*Math.cos(th)*s, Math.cos(ph)*s, Math.sin(ph)*Math.sin(th)*s); } const geo=new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); const sys = new THREE.Points(geo, new THREE.PointsMaterial({ color: "#FFD700", size: 0.06, transparent: true, blending: THREE.AdditiveBlending })); scene.add(sys); fireworks.push({ mesh: sys, vels: v, life: 1.2 }); }
+        function handlePhotoUpload(e) { const f = e.target.files[0]; if(f){ const r=new FileReader(); r.onload=(ev)=>{ const tex=new THREE.TextureLoader().load(ev.target.result); createPhotoMedallion(tex); }; r.readAsDataURL(f); } }
+        function onSceneClick(e) { mouse.x=(e.clientX/window.innerWidth)*2-1; mouse.y=-(e.clientY/window.innerHeight)*2+1; raycaster.setFromCamera(mouse,camera); const ints = raycaster.intersectObjects(ornaments, true); if(ints.length>0){ let t=ints[0].object; while(t.parent!==treeGroup && t.parent!==scene) t=t.parent; document.getElementById('blessing-text').innerText = t.userData.type==='photo'?"圣诞快乐！":`心愿：${t.userData.text}`; document.getElementById('blessing-card').style.display='block'; } }
+        function onWindowResize() { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); }
+        window.closeBlessing = () => document.getElementById('blessing-card').style.display = 'none';
+    </script>
+</body>
+</html>
